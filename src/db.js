@@ -64,6 +64,8 @@ export async function upsertEvent(db, calendarPath, uid, icsData, dtstart, dtend
 			 VALUES (?, ?, ?, ?, ?)`
 		).bind(cal.id, uid, icsData, dtstart, dtend).run();
 	}
+	// Update calendar ctag so clients detect changes
+	await db.prepare(`UPDATE calendars SET updated = datetime('now') WHERE id = ?`).bind(cal.id).run();
 	return getEvent(db, calendarPath, uid);
 }
 
@@ -73,5 +75,9 @@ export async function deleteEvent(db, calendarPath, uid) {
 	const result = await db.prepare(
 		'DELETE FROM events WHERE calendar_id = ? AND uid = ?'
 	).bind(cal.id, uid).run();
-	return result.changes > 0;
+	if (result.changes > 0) {
+		await db.prepare(`UPDATE calendars SET updated = datetime('now') WHERE id = ?`).bind(cal.id).run();
+		return true;
+	}
+	return false;
 }

@@ -101,6 +101,7 @@ export function buildCalendarResource(calendar, events, includeData) {
 				{ ns: 'DAV:', name: 'getetag', value: `"${calendar.updated}"` },
 				{ ns: CS_NS, name: 'getctag', value: calendar.updated },
 				{ ns: 'DAV:', name: 'supported-report-set', children: SUPPORTED_REPORTS },
+				{ ns: CALDAV_NS, name: 'supported-calendar-component-set', children: '<C:comp name="VEVENT"/>' },
 			],
 		}],
 	}];

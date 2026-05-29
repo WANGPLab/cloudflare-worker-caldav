@@ -70,10 +70,12 @@ export function parseIcs(icsText) {
 			case 'DTSTART':
 				event.dtstart = normalizeDate(value, params);
 				event.dtstartRaw = value;
+				if (params.TZID) event.dtstartTzid = params.TZID;
 				break;
 			case 'DTEND':
 				event.dtend = normalizeDate(value, params);
 				event.dtendRaw = value;
+				if (params.TZID) event.dtendTzid = params.TZID;
 				break;
 			case 'DURATION':
 				event.duration = value;
@@ -200,19 +202,43 @@ function utcNow() {
 }
 
 // Extract DTSTART/DTEND from raw .ics for database storage
+// Converts TZID times to UTC for consistent querying
 export function extractTimeRange(icsText) {
 	const parsed = parseIcs(icsText);
+	const tzid = parsed.dtstartTzid || parsed.dtendTzid || null;
+	let dtstart = parsed.dtstart;
 	let dtend = parsed.dtend;
 
 	// If no DTEND, derive from DTSTART + DURATION or default to DTSTART
 	if (!dtend) {
 		if (parsed.duration) {
-			dtend = applyDuration(parsed.dtstart, parsed.duration);
+			dtend = applyDuration(dtstart, parsed.duration);
 		} else {
-			dtend = parsed.dtstart;
+			dtend = dtstart;
 		}
 	}
-	return { dtstart: parsed.dtstart, dtend };
+
+	// Convert TZID local times to UTC for proper time-range queries
+	if (tzid && !dtstart.endsWith('Z')) {
+		dtstart = tzidToUTC(dtstart, tzid);
+	}
+	if (tzid && !dtend.endsWith('Z')) {
+		dtend = tzidToUTC(dtend, tzid);
+	}
+
+	return { dtstart, dtend };
+}
+
+// Convert a local datetime string to UTC based on timezone
+function tzidToUTC(dtString, tzid) {
+	if (tzid === 'Asia/Shanghai') {
+		const m = dtString.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/);
+		if (!m) return dtString;
+		// Asia/Shanghai is UTC+8
+		const utc = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) - 8 * 3600000);
+		return utc.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+	}
+	return dtString;
 }
 
 function applyDuration(dtstart, durationStr) {
