@@ -24,11 +24,14 @@ export function authenticate(request, env) {
 	}
 }
 
+import { DAV_HEADERS } from './xml';
+
 export function authChallengeResponse() {
 	return new Response('Unauthorized', {
 		status: 401,
 		headers: {
 			'WWW-Authenticate': 'Basic realm="CalDAV"',
+			...DAV_HEADERS,
 		},
 	});
 }

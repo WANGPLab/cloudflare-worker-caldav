@@ -4,8 +4,6 @@ const CALDAV_NS = 'urn:ietf:params:xml:ns:caldav';
 const CS_NS = 'http://calendarserver.org/ns/';
 
 function tag(ns, name, content, attrs) {
-	const nsAttr = ns === 'DAV:' ? ' xmlns:D="DAV:"' : '';
-	const calAttr = ns === CALDAV_NS ? ' xmlns:C="urn:ietf:params:xml:ns:caldav"' : '';
 	let attrStr = '';
 	if (attrs) {
 		for (const [k, v] of Object.entries(attrs)) {
@@ -17,6 +15,9 @@ function tag(ns, name, content, attrs) {
 	}
 	if (ns === CALDAV_NS) {
 		return `<C:${name}${attrStr}>${content !== undefined ? content : ''}</C:${name}>`;
+	}
+	if (ns === CS_NS) {
+		return `<CS:${name}${attrStr}>${content !== undefined ? content : ''}</CS:${name}>`;
 	}
 	return `<${name}${attrStr}>${content !== undefined ? content : ''}</${name}>`;
 }
@@ -84,6 +85,9 @@ export function buildEventList(calendarPath, events, includeData) {
 	return res;
 }
 
+const SUPPORTED_REPORTS = '<D:supported-report><D:report><C:calendar-query/></D:report></D:supported-report>' +
+	'<D:supported-report><D:report><C:calendar-multiget/></D:report></D:supported-report>';
+
 // Build the calendar collection resource
 // Set includeData=true for REPORT responses that need calendar-data
 export function buildCalendarResource(calendar, events, includeData) {
@@ -96,6 +100,7 @@ export function buildCalendarResource(calendar, events, includeData) {
 				{ ns: 'DAV:', name: 'displayname', value: calendar.name },
 				{ ns: 'DAV:', name: 'getetag', value: `"${calendar.updated}"` },
 				{ ns: CS_NS, name: 'getctag', value: calendar.updated },
+				{ ns: 'DAV:', name: 'supported-report-set', children: SUPPORTED_REPORTS },
 			],
 		}],
 	}];

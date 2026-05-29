@@ -18,7 +18,7 @@
 		{
 			"binding": "CALDAV_DB",
 			"database_name": "caldav-db",
-			"database_id": "caldav-db-dev"
+			"database_id": "2bc0020a-e08b-4893-b8e6-de1743168053"
 		}
 	]
 }
