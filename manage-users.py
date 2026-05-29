@@ -74,7 +74,7 @@ def main():
     reg = sub.add_parser("register", help="注册新用户")
     reg.add_argument("username")
     reg.add_argument("-p", "--password", nargs="?", default=None, help="新用户密码（省略则交互输入）")
-    reg.add_argument("-a", "--admin-password", nargs="?", default=None, help="admin 密码（省略则交互输入）")
+    reg.add_argument("-a", "--admin-password", nargs="?", default=None, help="admin 密码（首个用户无需提供）")
 
     pwd = sub.add_parser("change-password", help="修改密码")
     pwd.add_argument("username")

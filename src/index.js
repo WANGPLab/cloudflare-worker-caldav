@@ -111,20 +111,24 @@ export default {
 async function handleApiRegister(env, request) {
 	try {
 		const { username, password, adminPassword } = await request.json();
-		if (!adminPassword) return jsonResponse({ error: 'adminPassword is required' }, 400);
 
-		// Verify admin password: try D1 first, then env vars
-		let adminOk = false;
-		try {
-			const adminUser = await authenticateUser(env.CALDAV_DB, 'admin', adminPassword);
-			if (adminUser) adminOk = true;
-		} catch (e) { /* ignore */ }
-		if (!adminOk && env.AUTH_USERNAME && env.AUTH_PASSWORD) {
-			if (env.AUTH_USERNAME === 'admin' && adminPassword === env.AUTH_PASSWORD) {
+		// Bootstrap: if no users exist, allow first registration without admin password
+		const userCount = await env.CALDAV_DB.prepare('SELECT COUNT(*) as c FROM users').first();
+		const isBootstrap = (userCount && userCount.c === 0);
+
+		if (!isBootstrap) {
+			if (!adminPassword) return jsonResponse({ error: 'adminPassword is required' }, 400);
+
+			let adminOk = false;
+			try {
+				const adminUser = await authenticateUser(env.CALDAV_DB, 'admin', adminPassword);
+				if (adminUser) adminOk = true;
+			} catch (e) { /* ignore */ }
+			if (!adminOk && env.AUTH_PASSWORD && adminPassword === env.AUTH_PASSWORD) {
 				adminOk = true;
 			}
+			if (!adminOk) return jsonResponse({ error: 'Admin password incorrect' }, 403);
 		}
-		if (!adminOk) return jsonResponse({ error: 'Admin password incorrect' }, 403);
 
 		const result = await registerUser(env.CALDAV_DB, username, password);
 		if (result.error) return jsonResponse({ error: result.error }, 400);

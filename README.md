@@ -76,17 +76,19 @@ npx wrangler deploy
 
 ### 注册管理员
 
+部署后数据库中无任何用户时，**首次注册无需 admin 密码**（bootstrap 模式）。注册第一个用户后，后续注册都需要 admin 密码。
+
 ```bash
-# 方式 1：API 注册（部署后首次无用户时）
+# 首次注册（无用户时无需 adminPassword）
 curl -X POST https://your-worker.workers.dev/api/register \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"yourpassword","adminPassword":"bootstrap"}'
+  -d '{"username":"admin","password":"yourpassword"}'
 
-# 方式 2：Python 脚本
-python3 manage-users.py register admin -p yourpassword -a bootstrap
+# 后续注册（需 admin 密码）
+curl -X POST https://your-worker.workers.dev/api/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"zhangsan","password":"mypass","adminPassword":"yourpassword"}'
 ```
-
-> 首次注册时，`adminPassword` 会回退检查 env secrets 中的 `AUTH_PASSWORD`。
 
 ### 导入现有日历数据
 
