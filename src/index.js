@@ -2,11 +2,14 @@ import { DAV_HEADERS, buildMultistatus, buildCalendarResource, buildEventList, p
 import { parseIcs, generateIcs, extractTimeRange } from './ical';
 import { getCalendar, listCalendars, createCalendar, deleteCalendar, getEvent, listEvents, upsertEvent, deleteEvent } from './db';
 import { authenticate, authChallengeResponse } from './auth';
+import { registerUser, changePassword, changeUsername, authenticateUser, deleteUser } from './users';
 
 // Path patterns:
-//   /                       → 404
-//   /<owner>/               → PROPFIND: list calendars / principal discovery
-//   /<owner>/<calendar>/     → PROPFIND: list events in calendar, REPORT, MKCALENDAR
+//   /api/register             → POST: create user
+//   /api/change-password      → POST: change password
+//   /api/change-username      → POST: change username
+//   /<owner>/                 → PROPFIND: list calendars / principal discovery
+//   /<owner>/<calendar>/      → PROPFIND/REPORT/MKCALENDAR on a calendar
 //   /<owner>/<calendar>/<uid>.ics → GET/PUT/DELETE event
 
 function parsePath(pathname) {
@@ -14,7 +17,6 @@ function parsePath(pathname) {
 	if (parts.length === 0) return { owner: null, calendar: null, uid: null };
 	if (parts.length === 1) return { owner: parts[0], calendar: null, uid: null };
 	if (parts.length === 2) return { owner: parts[0], calendar: parts[1], uid: null };
-	// 3+ parts: /owner/calendar/sub/...  or /owner/calendar/uid.ics
 	const last = parts[parts.length - 1];
 	if (last.endsWith('.ics')) {
 		return { owner: parts[0], calendar: parts[1], uid: last.replace(/\.ics$/, '') };
@@ -22,26 +24,63 @@ function parsePath(pathname) {
 	return { owner: parts[0], calendar: parts[1], uid: null };
 }
 
+async function jsonResponse(data, status = 200) {
+	return new Response(JSON.stringify(data), {
+		status,
+		headers: { 'Content-Type': 'application/json' },
+	});
+}
+
 export default {
 	async fetch(request, env) {
-		if (!authenticate(request, env)) {
-			return authChallengeResponse();
-		}
-
 		const url = new URL(request.url);
 		let method = request.method.toUpperCase();
 
-		// Workaround: local wrangler dev rejects MKCALENDAR method.
-		// Accept POST with X-Method-Override header as a substitute.
 		const override = request.headers.get('X-Method-Override');
-		if (method === 'POST' && override) {
+		if (method === 'POST' && override && override.toUpperCase() !== 'POST') {
 			method = override.toUpperCase();
 		}
 
+		// --- API routes (admin-password auth, no CalDAV auth needed) ---
+		if (url.pathname === '/api/register' && method === 'POST') {
+			return handleApiRegister(env, request);
+		}
+		if (url.pathname === '/api/delete-user' && method === 'POST') {
+			return handleApiDeleteUser(env, request);
+		}
+
+		// --- Auth required for everything else ---
+		const auth = await authenticate(request, env);
+		if (!auth) {
+			return authChallengeResponse();
+		}
+		const authUser = auth.username;
+
+		// API routes (require auth)
+		if (url.pathname === '/api/change-password' && method === 'POST') {
+			return handleApiChangePassword(env, authUser, request);
+		}
+		if (url.pathname === '/api/change-username' && method === 'POST') {
+			return handleApiChangeUsername(env, authUser, request);
+		}
+		// --- CalDAV routes ---
 		const { owner, calendar, uid } = parsePath(url.pathname);
+
+		// Well-known discovery: redirect to authenticated user's home
+		if (url.pathname === '/.well-known/caldav' || url.pathname === '/') {
+			return new Response(null, {
+				status: 301,
+				headers: { Location: `/${authUser}/` },
+			});
+		}
 
 		if (!owner) {
 			return new Response('Not Found', { status: 404 });
+		}
+
+		// Owner in URL must match authenticated user
+		if (owner !== authUser) {
+			return new Response(`Forbidden: owner=${owner} user=${authUser}`, { status: 403, headers: DAV_HEADERS });
 		}
 
 		const calPath = calendar ? `/${owner}/${calendar}/` : null;
@@ -67,6 +106,83 @@ export default {
 	},
 };
 
+// --- API handlers ---
+
+async function handleApiRegister(env, request) {
+	try {
+		const { username, password, adminPassword } = await request.json();
+		if (!adminPassword) return jsonResponse({ error: 'adminPassword is required' }, 400);
+
+		// Verify admin password: try D1 first, then env vars
+		let adminOk = false;
+		try {
+			const adminUser = await authenticateUser(env.CALDAV_DB, 'admin', adminPassword);
+			if (adminUser) adminOk = true;
+		} catch (e) { /* ignore */ }
+		if (!adminOk && env.AUTH_USERNAME && env.AUTH_PASSWORD) {
+			if (env.AUTH_USERNAME === 'admin' && adminPassword === env.AUTH_PASSWORD) {
+				adminOk = true;
+			}
+		}
+		if (!adminOk) return jsonResponse({ error: 'Admin password incorrect' }, 403);
+
+		const result = await registerUser(env.CALDAV_DB, username, password);
+		if (result.error) return jsonResponse({ error: result.error }, 400);
+		return jsonResponse(result, 201);
+	} catch (e) {
+		return jsonResponse({ error: 'Invalid JSON body' }, 400);
+	}
+}
+
+async function handleApiChangePassword(env, username, request) {
+	try {
+		const { oldPassword, newPassword } = await request.json();
+		const result = await changePassword(env.CALDAV_DB, username, oldPassword, newPassword);
+		if (result.error) return jsonResponse({ error: result.error }, 400);
+		return jsonResponse(result);
+	} catch (e) {
+		return jsonResponse({ error: 'Invalid JSON body' }, 400);
+	}
+}
+
+async function handleApiChangeUsername(env, oldUsername, request) {
+	try {
+		const { newUsername, password } = await request.json();
+		const result = await changeUsername(env.CALDAV_DB, oldUsername, newUsername, password);
+		if (result.error) return jsonResponse({ error: result.error }, 400);
+		// New username means new calendar paths
+		return jsonResponse({ success: true, username: result.username });
+	} catch (e) {
+		return jsonResponse({ error: 'Invalid JSON body' }, 400);
+	}
+}
+
+async function handleApiDeleteUser(env, request) {
+	try {
+		const { username, adminPassword } = await request.json();
+		if (!adminPassword) return jsonResponse({ error: 'adminPassword is required' }, 400);
+
+		// Verify admin password
+		let adminOk = false;
+		try {
+			const adminUser = await authenticateUser(env.CALDAV_DB, 'admin', adminPassword);
+			if (adminUser) adminOk = true;
+		} catch (e) { /* ignore */ }
+		if (!adminOk && env.AUTH_PASSWORD === adminPassword) {
+			adminOk = true;
+		}
+		if (!adminOk) return jsonResponse({ error: 'Admin password incorrect' }, 403);
+
+		const result = await deleteUser(env.CALDAV_DB, username);
+		if (result.error) return jsonResponse({ error: result.error }, 400);
+		return jsonResponse(result);
+	} catch (e) {
+		return jsonResponse({ error: 'Invalid JSON body' }, 400);
+	}
+}
+
+// --- CalDAV handlers ---
+
 function handleOptions() {
 	return new Response(null, {
 		status: 200,
@@ -77,7 +193,6 @@ function handleOptions() {
 	});
 }
 
-// Parse the PROPFIND body to extract requested property names
 function parsePropfindBody(text) {
 	if (!text) return [];
 	const props = [];
@@ -96,7 +211,6 @@ async function handlePropfind(env, owner, calPath, request) {
 	const requestedProps = parsePropfindBody(body);
 	const depth = request.headers.get('Depth') || 'infinity';
 
-	// Principal discovery: PROPFIND on /user/ asking for current-user-principal
 	const wantsPrincipal = requestedProps.includes('current-user-principal');
 	const wantsHome = requestedProps.includes('calendar-home-set');
 	const isPrincipalProbe = !calPath && (wantsPrincipal || wantsHome);
@@ -110,7 +224,6 @@ async function handlePropfind(env, owner, calPath, request) {
 		if (!cal) return new Response(buildError('not-found'), { status: 404, headers: DAV_HEADERS });
 
 		if (depth === '0') {
-			// Only return the calendar resource itself, no child events
 			const responses = buildCalendarResource(cal, []);
 			return new Response(buildMultistatus(responses), { status: 207, headers: DAV_HEADERS });
 		}
@@ -120,7 +233,6 @@ async function handlePropfind(env, owner, calPath, request) {
 		return new Response(buildMultistatus(responses), { status: 207, headers: DAV_HEADERS });
 	}
 
-	// PROPFIND on the user's root — list all calendars
 	const calendars = await listCalendars(db, owner);
 	const responses = [];
 	for (const cal of calendars) {
@@ -176,40 +288,27 @@ async function handleReport(env, owner, calPath, request) {
 }
 
 async function handleGet(env, calPath, uid) {
-	if (!calPath || !uid) {
-		return new Response('Not Found', { status: 404 });
-	}
-
-	const db = env.CALDAV_DB;
-	const event = await getEvent(db, calPath, uid);
+	if (!calPath || !uid) return new Response('Not Found', { status: 404 });
+	const event = await getEvent(env.CALDAV_DB, calPath, uid);
 	if (!event) return new Response('Not Found', { status: 404 });
-
 	return new Response(event.ics_data, {
 		status: 200,
-		headers: {
-			'Content-Type': 'text/calendar; charset=utf-8',
-			ETag: `"${event.updated}"`,
-		},
+		headers: { 'Content-Type': 'text/calendar; charset=utf-8', ETag: `"${event.updated}"` },
 	});
 }
 
 async function handlePut(env, calPath, uid, request) {
-	if (!calPath || !uid) {
-		return new Response('Not Found', { status: 404 });
-	}
-
+	if (!calPath || !uid) return new Response('Not Found', { status: 404 });
 	const db = env.CALDAV_DB;
 	const cal = await getCalendar(db, calPath);
 	if (!cal) return new Response(buildError('not-found'), { status: 404, headers: DAV_HEADERS });
 
 	const ifMatch = request.headers.get('If-Match');
 	const ifNoneMatch = request.headers.get('If-None-Match');
-
 	const existing = await getEvent(db, calPath, uid);
 
 	if (ifMatch && existing) {
-		const expected = ifMatch.replace(/^"|"$/g, '');
-		if (existing.updated !== expected) {
+		if (existing.updated !== ifMatch.replace(/^"|"$/g, '')) {
 			return new Response('Precondition Failed', { status: 412 });
 		}
 	}
@@ -219,20 +318,15 @@ async function handlePut(env, calPath, uid, request) {
 
 	const icsData = await request.text();
 	const parsed = parseIcs(icsData);
-
 	const eventUid = parsed.uid || uid;
 	if (existing && eventUid !== uid) {
 		return new Response('UID Mismatch', { status: 409 });
 	}
 
 	const { dtstart, dtend } = extractTimeRange(icsData);
-
-	if (!dtstart) {
-		return new Response('Missing DTSTART', { status: 400 });
-	}
+	if (!dtstart) return new Response('Missing DTSTART', { status: 400 });
 
 	await upsertEvent(db, calPath, uid, icsData, dtstart, dtend || dtstart);
-
 	return new Response(null, {
 		status: existing ? 204 : 201,
 		headers: { ETag: `"${new Date().toISOString()}"` },
@@ -241,29 +335,22 @@ async function handlePut(env, calPath, uid, request) {
 
 async function handleDelete(env, calPath, uid) {
 	const db = env.CALDAV_DB;
-
 	if (uid) {
 		if (!calPath) return new Response('Not Found', { status: 404 });
 		const deleted = await deleteEvent(db, calPath, uid);
-		if (!deleted) return new Response('Not Found', { status: 404 });
-		return new Response(null, { status: 204 });
+		return deleted ? new Response(null, { status: 204 }) : new Response('Not Found', { status: 404 });
 	}
-
 	if (calPath) {
 		const cal = await getCalendar(db, calPath);
 		if (!cal) return new Response('Not Found', { status: 404 });
 		await deleteCalendar(db, calPath);
 		return new Response(null, { status: 204 });
 	}
-
 	return new Response('Not Found', { status: 404 });
 }
 
 async function handleMkcalendar(env, owner, calPath, request) {
-	if (!calPath) {
-		return new Response('Bad Request', { status: 400 });
-	}
-
+	if (!calPath) return new Response('Bad Request', { status: 400 });
 	const db = env.CALDAV_DB;
 	const existing = await getCalendar(db, calPath);
 	if (existing) return new Response('Calendar already exists', { status: 409 });
