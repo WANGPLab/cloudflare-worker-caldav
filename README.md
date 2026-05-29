@@ -121,7 +121,7 @@ python3 manage-users.py delete-user zhangsan -a adminpass
    - **密码**：你的密码
    - **位置**：`https://your-worker.workers.dev/username/default/`
 
-> 如果用自定义域名（如 `myfreebot.dpdns.org`），需要在 Cloudflare Dashboard 配置 Worker 路由。
+> 如果用自定义域名，需要在 Cloudflare Dashboard 配置 Worker 路由。
 
 ## 开发
 
