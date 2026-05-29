@@ -165,3 +165,5 @@ dist
 .env*
 !.env.example
 .wrangler/
+fruux-Calendar.ics
+migrations/002_import_events.sql
