@@ -1,6 +1,6 @@
 // CalDAV XML constants
 const DAV_NS = 'DAV:';
-const CALDAV_NS = 'urn:ietf:params:xml:ns:caldav';
+export const CALDAV_NS = 'urn:ietf:params:xml:ns:caldav';
 const CS_NS = 'http://calendarserver.org/ns/';
 
 function tag(ns, name, content, attrs) {
@@ -33,7 +33,8 @@ export const DAV_HEADERS = {
 
 // Build a <D:multistatus> response from an array of response objects.
 // Each response: { href, propstat: [{ status, props: { ns, name, value, [attrs] } }] }
-export function buildMultistatus(responses) {
+// syncToken: optional RFC 6578 sync-token to append
+export function buildMultistatus(responses, syncToken) {
 	let xml = `<?xml version="1.0" encoding="utf-8"?>\n<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:CS="http://calendarserver.org/ns/">`;
 	for (const r of responses) {
 		xml += `<D:response><D:href>${escXml(r.href)}</D:href>`;
@@ -42,6 +43,7 @@ export function buildMultistatus(responses) {
 		}
 		xml += `</D:response>`;
 	}
+	if (syncToken) xml += `<D:sync-token>${escXml(syncToken)}</D:sync-token>`;
 	xml += `</D:multistatus>`;
 	return xml;
 }
@@ -86,7 +88,8 @@ export function buildEventList(calendarPath, events, includeData) {
 }
 
 const SUPPORTED_REPORTS = '<D:supported-report><D:report><C:calendar-query/></D:report></D:supported-report>' +
-	'<D:supported-report><D:report><C:calendar-multiget/></D:report></D:supported-report>';
+	'<D:supported-report><D:report><C:calendar-multiget/></D:report></D:supported-report>' +
+	'<D:supported-report><D:report><D:sync-collection/></D:report></D:supported-report>';
 
 // Build the calendar collection resource
 // Set includeData=true for REPORT responses that need calendar-data
@@ -102,6 +105,12 @@ export function buildCalendarResource(calendar, events, includeData) {
 				{ ns: CS_NS, name: 'getctag', value: calendar.updated },
 				{ ns: 'DAV:', name: 'supported-report-set', children: SUPPORTED_REPORTS },
 				{ ns: CALDAV_NS, name: 'supported-calendar-component-set', children: '<C:comp name="VEVENT"/>' },
+				{ ns: CALDAV_NS, name: 'calendar-home-set', children: `<D:href>/${calendar.owner}/</D:href>` },
+				{ ns: 'DAV:', name: 'sync-token', value: calendar.updated.replace(/ /g, 'T') },
+				{ ns: 'DAV:', name: 'current-user-privilege-set', children:
+					'<D:privilege><D:read/></D:privilege><D:privilege><D:write/></D:privilege>' +
+					'<D:privilege><D:write-content/></D:privilege><D:privilege><D:write-properties/></D:privilege>' +
+					'<D:privilege><D:bind/></D:privilege><D:privilege><D:unbind/></D:privilege>' },
 			],
 		}],
 	}];

@@ -1,4 +1,4 @@
-import { DAV_HEADERS, buildMultistatus, buildCalendarResource, buildEventList, parseReportBody, buildError } from './xml';
+import { DAV_HEADERS, buildMultistatus, buildCalendarResource, buildEventList, parseReportBody, buildError, CALDAV_NS } from './xml';
 import { parseIcs, generateIcs, extractTimeRange } from './ical';
 import { getCalendar, listCalendars, createCalendar, deleteCalendar, getEvent, listEvents, upsertEvent, deleteEvent } from './db';
 import { authenticate, authChallengeResponse } from './auth';
@@ -31,80 +31,90 @@ async function jsonResponse(data, status = 200) {
 	});
 }
 
+const DEBUG = false; // Set false to disable debug logging
+
 export default {
 	async fetch(request, env) {
 		const url = new URL(request.url);
 		let method = request.method.toUpperCase();
+
+		if (DEBUG) {
+			const cloned = request.clone();
+			const body = await cloned.text().catch(() => '(unreadable)');
+			console.log(`\n=== ${method} ${url.pathname} ===`);
+			console.log(`Host: ${url.host}  Auth: ${request.headers.get('Authorization') ? 'yes' : 'no'}`);
+			console.log(`Body (first 500): ${body.substring(0, 500)}`);
+		}
 
 		const override = request.headers.get('X-Method-Override');
 		if (method === 'POST' && override && override.toUpperCase() !== 'POST') {
 			method = override.toUpperCase();
 		}
 
+		let response;
+
 		// --- API routes (admin-password auth, no CalDAV auth needed) ---
 		if (url.pathname === '/api/register' && method === 'POST') {
-			return handleApiRegister(env, request);
-		}
-		if (url.pathname === '/api/delete-user' && method === 'POST') {
-			return handleApiDeleteUser(env, request);
-		}
+			response = handleApiRegister(env, request);
+		} else if (url.pathname === '/api/delete-user' && method === 'POST') {
+			response = handleApiDeleteUser(env, request);
+		} else {
+			// --- Auth required for everything else ---
+			const auth = await authenticate(request, env);
+			if (!auth) {
+				response = authChallengeResponse();
+			} else {
+				const authUser = auth.username;
+				if (url.pathname === '/api/change-password' && method === 'POST') {
+					response = handleApiChangePassword(env, authUser, request);
+				} else if (url.pathname === '/api/change-username' && method === 'POST') {
+					response = handleApiChangeUsername(env, authUser, request);
+				} else {
+					// --- CalDAV routes ---
+					const { owner, calendar, uid } = parsePath(url.pathname);
 
-		// --- Auth required for everything else ---
-		const auth = await authenticate(request, env);
-		if (!auth) {
-			return authChallengeResponse();
-		}
-		const authUser = auth.username;
-
-		// API routes (require auth)
-		if (url.pathname === '/api/change-password' && method === 'POST') {
-			return handleApiChangePassword(env, authUser, request);
-		}
-		if (url.pathname === '/api/change-username' && method === 'POST') {
-			return handleApiChangeUsername(env, authUser, request);
-		}
-		// --- CalDAV routes ---
-		const { owner, calendar, uid } = parsePath(url.pathname);
-
-		// Well-known discovery: redirect to authenticated user's home
-		if (url.pathname === '/.well-known/caldav' || url.pathname === '/') {
-			return new Response(null, {
-				status: 301,
-				headers: { Location: `/${authUser}/` },
-			});
-		}
-
-		if (!owner) {
-			return new Response('Not Found', { status: 404 });
-		}
-
-		// Owner in URL must match authenticated user
-		if (owner !== authUser) {
-			return new Response(`Forbidden: owner=${owner} user=${authUser}`, { status: 403, headers: DAV_HEADERS });
-		}
-
-		const calPath = calendar ? `/${owner}/${calendar}/` : null;
-
+					if (url.pathname === '/.well-known/caldav' || url.pathname === '/') {
+						if (method === 'PROPFIND') {
+							response = handlePrincipalDiscovery(authUser);
+						} else {
+							response = new Response(null, { status: 301, headers: { Location: `/${authUser}/` } });
+						}
+					} else if (!owner) {
+						response = new Response('Not Found', { status: 404 });
+					} else if (owner !== authUser) {
+						response = new Response(`Forbidden: owner=${owner} user=${authUser}`, { status: 403, headers: DAV_HEADERS });
+					} else {
+						const calPath = calendar ? `/${owner}/${calendar}/` : null;
 		switch (method) {
 			case 'OPTIONS':
-				return handleOptions();
+				response = handleOptions(); break;
 			case 'PROPFIND':
-				return await handlePropfind(env, owner, calPath, request);
+				response = await handlePropfind(env, owner, calPath, request); break;
 			case 'REPORT':
-				return await handleReport(env, owner, calPath, request);
+				response = await handleReport(env, owner, calPath, request); break;
 			case 'GET':
-				return await handleGet(env, calPath, uid);
+				response = await handleGet(env, calPath, uid); break;
 			case 'PUT':
-				return await handlePut(env, calPath, uid, request);
+				response = await handlePut(env, calPath, uid, request); break;
 			case 'DELETE':
-				return await handleDelete(env, calPath, uid);
+				response = await handleDelete(env, calPath, uid); break;
 			case 'MKCALENDAR':
-				return await handleMkcalendar(env, owner, calPath, request);
+				response = await handleMkcalendar(env, owner, calPath, request); break;
 			default:
-				return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'OPTIONS, PROPFIND, REPORT, GET, PUT, DELETE, MKCALENDAR' } });
-		}
-	},
-};
+				response = new Response('Method Not Allowed', { status: 405, headers: { Allow: 'OPTIONS, PROPFIND, REPORT, GET, PUT, DELETE, MKCALENDAR' } });
+							}
+						}
+					}
+				}
+			}
+			if (DEBUG && response) {
+				const cloned = response.clone();
+				const body = await cloned.text().catch(() => '(unreadable)');
+				console.log(`Resp: ${response.status} ${body.substring(0, 800)}`);
+			}
+			return response;
+		},
+	};
 
 // --- API handlers ---
 
@@ -200,7 +210,7 @@ function handleOptions() {
 function parsePropfindBody(text) {
 	if (!text) return [];
 	const props = [];
-	const regex = /<(?:D:)?(getetag|getcontenttype|resourcetype|displayname|getctag|current-user-principal|calendar-home-set|supported-report-set|principal-URL|principal-collection-set|calendar-user-address-set|owner)\s*\/?>/gi;
+	const regex = /<(?:D:)?(getetag|getcontenttype|resourcetype|displayname|getctag|current-user-principal|calendar-home-set|supported-report-set|principal-URL|principal-collection-set|calendar-user-address-set|owner|sync-token|current-user-privilege-set)\s*\/?>/gi;
 	let m;
 	while ((m = regex.exec(text)) !== null) {
 		props.push(m[1]);
@@ -278,6 +288,17 @@ async function handleReport(env, owner, calPath, request) {
 	if (!cal) return new Response(buildError('not-found'), { status: 404, headers: DAV_HEADERS });
 
 	const body = await request.text();
+
+	// sync-collection REPORT (RFC 6578)
+	if (body.includes('sync-collection')) {
+		return handleSyncCollection(cal, calPath, db);
+	}
+
+	// calendar-multiget REPORT (RFC 4791 §7.9)
+	if (body.includes('calendar-multiget')) {
+		return handleCalendarMultiget(calPath, db, body);
+	}
+
 	const query = parseReportBody(body);
 
 	let events;
@@ -288,6 +309,49 @@ async function handleReport(env, owner, calPath, request) {
 	}
 
 	const responses = buildCalendarResource(cal, events, true);
+	return new Response(buildMultistatus(responses), { status: 207, headers: DAV_HEADERS });
+}
+
+async function handleSyncCollection(cal, calPath, db) {
+	const events = await listEvents(db, calPath, null, null);
+	const responses = buildEventList(calPath, events, true);
+	const syncToken = `urn:caldav:sync:${cal.updated.replace(/[ :]/g, '_')}`;
+	return new Response(buildMultistatus(responses, syncToken), { status: 207, headers: DAV_HEADERS });
+}
+
+
+async function handleCalendarMultiget(calPath, db, body) {
+	// Extract hrefs from request body
+	const hrefs = [];
+	const hrefRegex = /<(?:D:)?href[^>]*>([^<]+)<\/(?:D:)?href>/g;
+	let m;
+	while ((m = hrefRegex.exec(body)) !== null) {
+		hrefs.push(m[1]);
+	}
+
+	const responses = [];
+	for (const href of hrefs) {
+		// Extract UID from href: /admin/default/UID.ics
+		const uid = href.split('/').pop()?.replace('.ics', '') || '';
+		const event = await getEvent(db, calPath, uid);
+		if (event) {
+			responses.push({
+				href,
+				propstat: [{
+					status: 'HTTP/1.1 200 OK',
+					props: [
+						{ ns: 'DAV:', name: 'getetag', value: `"${event.updated}"` },
+						{ ns: CALDAV_NS, name: 'calendar-data', value: event.ics_data },
+					],
+				}],
+			});
+		} else {
+			responses.push({
+				href,
+				propstat: [{ status: 'HTTP/1.1 404 Not Found', props: [] }],
+			});
+		}
+	}
 	return new Response(buildMultistatus(responses), { status: 207, headers: DAV_HEADERS });
 }
 
