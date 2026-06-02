@@ -68,7 +68,6 @@ npx wrangler d1 create caldav-db
 
 # 执行迁移
 npx wrangler d1 execute caldav-db --remote --file=migrations/001_schema.sql
-npx wrangler d1 execute caldav-db --remote --file=migrations/003_users.sql
 
 # 部署
 npx wrangler deploy
@@ -157,8 +156,7 @@ src/
 ├── xml.js         # CalDAV XML 构建（multistatus/propfind/report）
 └── ical.js        # iCalendar 解析/生成（含 TZID→UTC 转换）
 migrations/
-├── 001_schema.sql # calendars + events 表
-└── 003_users.sql  # users 表
+└── 001_schema.sql # users + calendars + events 表
 test/
 └── index.spec.js  # Vitest 测试
 manage-users.py    # 账号管理 CLI
