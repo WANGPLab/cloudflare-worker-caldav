@@ -1,4 +1,5 @@
-// Import script: parse fruux-Calendar.ics and generate SQL for D1
+// Import script: parse .ics file and generate SQL for D1
+// Handles VEVENT, VTODO, VJOURNAL
 const fs = require('fs');
 
 const icsContent = fs.readFileSync('./fruux-Calendar.ics', 'utf-8');
@@ -10,32 +11,54 @@ function toUTC(dtString, tzid) {
 	if (dtString.endsWith('Z')) return dtString;
 
 	const match = dtString.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/);
-	if (!match) return dtString; // VALUE=DATE format, already handled
+	if (!match) return dtString;
 
 	const [, y, m, d, h, mi, s] = match;
-	// Asia/Shanghai is UTC+8: subtract 8 hours to get UTC
 	const utc = new Date(Date.UTC(+y, +m - 1, +d, +h, +mi, +s) - 8 * 3600000);
 	return utc.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
 }
 
-const veventRegex = /BEGIN:VEVENT\r?\n([\s\S]*?)END:VEVENT/g;
+// Match VEVENT, VTODO, VJOURNAL blocks
+const compRegex = /BEGIN:(VEVENT|VTODO|VJOURNAL)\r?\n([\s\S]*?)END:\1/g;
 const sqlStatements = [];
 let match;
 
-while ((match = veventRegex.exec(icsContent)) !== null) {
-	const body = match[1];
+while ((match = compRegex.exec(icsContent)) !== null) {
+	const compType = match[1];
+	const body = match[2];
 
 	const uidMatch = body.match(/^UID:(.+)$/m);
 	if (!uidMatch) continue;
 	const uid = uidMatch[1].trim().replace(/\r$/, '');
 
+	// DTSTART (or DUE for VTODO without DTSTART)
 	const dtstartMatch = body.match(/^DTSTART(?:;([^:]*))?:(.+)$/m);
-	if (!dtstartMatch) continue;
-	const dtstartParams = dtstartMatch[1] || '';
-	const dtstartRaw = dtstartMatch[2].trim().replace(/\r$/, '');
+	const dueMatch = body.match(/^DUE(?:;([^:]*))?:(.+)$/m);
+	let dtstartRaw, dtstartParams;
 
+	if (dtstartMatch) {
+		dtstartParams = dtstartMatch[1] || '';
+		dtstartRaw = dtstartMatch[2].trim().replace(/\r$/, '');
+	} else if (dueMatch) {
+		dtstartParams = dueMatch[1] || '';
+		dtstartRaw = dueMatch[2].trim().replace(/\r$/, '');
+	} else {
+		dtstartParams = '';
+		dtstartRaw = '19700101T000000';
+	}
+
+	// DTEND, DUE, or derived
 	const dtendMatch = body.match(/^DTEND(?:;([^:]*))?:(.+)$/m);
-	const dtendRaw = dtendMatch ? dtendMatch[2].trim().replace(/\r$/, '') : dtstartRaw;
+	let dtendRaw;
+	if (dtendMatch) {
+		dtendRaw = dtendMatch[2].trim().replace(/\r$/, '');
+	} else if (compType === 'VTODO' && dueMatch) {
+		dtendRaw = dueMatch[2].trim().replace(/\r$/, '');
+	} else if (compType === 'VTODO') {
+		dtendRaw = '99991231T235959Z'; // open-ended task
+	} else {
+		dtendRaw = dtstartRaw;
+	}
 
 	const isDate = dtstartParams.includes('VALUE=DATE');
 	const tzidMatch = dtstartParams.match(/TZID=([^;]+)/);
@@ -51,14 +74,18 @@ while ((match = veventRegex.exec(icsContent)) !== null) {
 		dtend = toUTC(dtend, tzid);
 	}
 
-	const fullVevent = 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//CalDAV Worker//EN\r\n' +
-		'BEGIN:VEVENT\r\n' + body + 'END:VEVENT\r\nEND:VCALENDAR\r\n';
+	// Build full ICS component
+	const fullItem = `BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//CalDAV Worker//EN\r\n` +
+		`BEGIN:${compType}\r\n` + body + `END:${compType}\r\nEND:VCALENDAR\r\n`;
 
 	const esc = (s) => s.replace(/'/g, "''");
 
+	// content_type indicates the component type for the object
+	const contentType = `text/calendar; component=${compType.toLowerCase()}`;
+
 	sqlStatements.push(
 		`INSERT OR REPLACE INTO events (calendar_id, uid, ics_data, dtstart, dtend) ` +
-		`VALUES (1, '${esc(uid)}', '${esc(fullVevent)}', '${esc(dtstart)}', '${esc(dtend)}');`
+		`VALUES (1, '${esc(uid)}', '${esc(fullItem)}', '${esc(dtstart)}', '${esc(dtend)}');`
 	);
 }
 

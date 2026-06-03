@@ -104,7 +104,7 @@ export function buildCalendarResource(calendar, events, includeData) {
 				{ ns: 'DAV:', name: 'getetag', value: `"${calendar.updated}"` },
 				{ ns: CS_NS, name: 'getctag', value: calendar.updated },
 				{ ns: 'DAV:', name: 'supported-report-set', children: SUPPORTED_REPORTS },
-				{ ns: CALDAV_NS, name: 'supported-calendar-component-set', children: '<C:comp name="VEVENT"/>' },
+				{ ns: CALDAV_NS, name: 'supported-calendar-component-set', children: '<C:comp name="VEVENT"/><C:comp name="VTODO"/><C:comp name="VJOURNAL"/>' },
 				{ ns: CALDAV_NS, name: 'calendar-home-set', children: `<D:href>/${calendar.owner}/</D:href>` },
 				{ ns: 'DAV:', name: 'sync-token', value: calendar.updated.replace(/ /g, 'T') },
 				{ ns: 'DAV:', name: 'current-user-privilege-set', children:

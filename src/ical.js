@@ -1,11 +1,11 @@
-// Minimal iCalendar parser/generator for VEVENT
+// Minimal iCalendar parser/generator supporting VEVENT, VTODO, VJOURNAL
 // Handles the common subset needed for CalDAV interop.
 
 // Parse an .ics string into structured data
 export function parseIcs(icsText) {
 	const lines = icsText.split(/\r?\n/);
-	let inVevent = false;
-	let inVcalendar = false;
+	let inComponent = false;
+	let componentType = '';
 	const event = {};
 	let currentLine = '';
 
@@ -22,23 +22,20 @@ export function parseIcs(icsText) {
 			line = currentLine;
 		}
 
-		if (line.startsWith('BEGIN:VEVENT')) {
-			inVevent = true;
+		if (line.startsWith('BEGIN:VEVENT') || line.startsWith('BEGIN:VTODO') || line.startsWith('BEGIN:VJOURNAL')) {
+			inComponent = true;
+			componentType = line.substring(6);
+			event.componentType = componentType;
 			continue;
 		}
-		if (line.startsWith('END:VEVENT')) {
-			inVevent = false;
+		if (line.startsWith('END:VEVENT') || line.startsWith('END:VTODO') || line.startsWith('END:VJOURNAL')) {
+			inComponent = false;
 			continue;
 		}
-		if (line.startsWith('BEGIN:VCALENDAR')) {
-			inVcalendar = true;
+		if (line.startsWith('BEGIN:VCALENDAR') || line.startsWith('END:VCALENDAR')) {
 			continue;
 		}
-		if (line.startsWith('END:VCALENDAR')) {
-			inVcalendar = false;
-			continue;
-		}
-		if (!inVevent) continue;
+		if (!inComponent) continue;
 
 		const colonIdx = line.indexOf(':');
 		if (colonIdx === -1) continue;
@@ -105,6 +102,18 @@ export function parseIcs(icsText) {
 				if (!event.attendees) event.attendees = [];
 				event.attendees.push(extractCn(value));
 				break;
+			// VTODO fields
+			case 'DUE':
+				event.due = normalizeDate(value, params);
+				event.dueRaw = value;
+				if (params.TZID) event.dueTzid = params.TZID;
+				break;
+			case 'COMPLETED':
+				event.completed = value;
+				break;
+			case 'PERCENT-COMPLETE':
+				event.percentComplete = value;
+				break;
 			default:
 				// Capture any unknown properties for round-trip
 				if (fieldName.trim() && !fieldName.startsWith('X-')) {
@@ -147,11 +156,12 @@ function extractCn(value) {
 
 // Generate .ics string from event data
 export function generateIcs(event) {
+	const comp = event.componentType || 'VEVENT';
 	const lines = [];
 	lines.push('BEGIN:VCALENDAR');
 	lines.push('VERSION:2.0');
 	lines.push('PRODID:-//CalDAV Worker//EN');
-	lines.push('BEGIN:VEVENT');
+	lines.push(`BEGIN:${comp}`);
 
 	if (event.uid) lines.push(`UID:${event.uid}`);
 	if (event.summary) {
@@ -168,6 +178,9 @@ export function generateIcs(event) {
 	}
 	if (event.dtstart) lines.push(`DTSTART:${event.dtstart}`);
 	if (event.dtend) lines.push(`DTEND:${event.dtend}`);
+	if (event.due) lines.push(`DUE:${event.due}`);
+	if (event.completed) lines.push(`COMPLETED:${event.completed}`);
+	if (event.percentComplete !== undefined) lines.push(`PERCENT-COMPLETE:${event.percentComplete}`);
 	if (event.duration) lines.push(`DURATION:${event.duration}`);
 	if (event.dtstamp) lines.push(`DTSTAMP:${event.dtstamp}`);
 	else lines.push(`DTSTAMP:${utcNow()}`);
@@ -183,7 +196,7 @@ export function generateIcs(event) {
 	}
 	if (event.lastModified) lines.push(`LAST-MODIFIED:${event.lastModified}`);
 
-	lines.push('END:VEVENT');
+	lines.push(`END:${comp}`);
 	lines.push('END:VCALENDAR');
 	return lines.join('\r\n') + '\r\n';
 }
@@ -205,12 +218,15 @@ function utcNow() {
 // Converts TZID times to UTC for consistent querying
 export function extractTimeRange(icsText) {
 	const parsed = parseIcs(icsText);
-	const tzid = parsed.dtstartTzid || parsed.dtendTzid || null;
-	let dtstart = parsed.dtstart;
-	let dtend = parsed.dtend;
+	const isTodo = parsed.componentType === 'VTODO';
+	const tzid = parsed.dtstartTzid || parsed.dtendTzid || parsed.dueTzid || null;
+	let dtstart = parsed.dtstart || parsed.due || '19700101T000000Z';
+	let dtend = parsed.dtend || parsed.due;
 
-	// If no DTEND, derive from DTSTART + DURATION or default to DTSTART
-	if (!dtend) {
+	// VTODO: use DUE as the end boundary; default to far future if no DUE
+	if (isTodo && !dtend) {
+		dtend = '99991231T235959Z';
+	} else if (!dtend) {
 		if (parsed.duration) {
 			dtend = applyDuration(dtstart, parsed.duration);
 		} else {
@@ -222,7 +238,7 @@ export function extractTimeRange(icsText) {
 	if (tzid && !dtstart.endsWith('Z')) {
 		dtstart = tzidToUTC(dtstart, tzid);
 	}
-	if (tzid && !dtend.endsWith('Z')) {
+	if (tzid && dtend && !dtend.endsWith('Z')) {
 		dtend = tzidToUTC(dtend, tzid);
 	}
 
