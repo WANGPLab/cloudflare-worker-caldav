@@ -2,6 +2,17 @@
 
 基于 [Cloudflare Workers](https://workers.cloudflare.com) + [D1](https://developers.cloudflare.com/d1/) 的个人日历服务器，支持多用户、CalDAV 协议，可通过 Thunderbird 等客户端同步。
 
+之前一直以为，caldav是个不算很复杂的协议，应该会有公司去提供，找了一圈，发现一直找不到很合适的免费服务。   
+然后自己就是只能使用了一个国外的fruux网站。   
+后来了解到赛博菩萨cloudflare提供了worker服务。  
+结合Claude code + 梁圣超级低价的deepseek tokens，实现了这个小小的需求。   
+其实GitHub上面已经有个类似的实现了， 
+https://github.com/onlca/CF-Workers-CalDAV 
+之前搜的时候，不知道为啥没有搜到。  
+如果大家有完善的需要，欢迎提出。
+
+
+
 ## 功能
 
 - **CalDAV 协议支持** — PROPFIND / REPORT / GET / PUT / DELETE / MKCALENDAR / OPTIONS
