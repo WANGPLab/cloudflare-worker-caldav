@@ -36,7 +36,7 @@ export async function listEvents(db, calendarPath, start, end) {
 	let result;
 	if (start && end) {
 		result = await db.prepare(
-			`SELECT * FROM events WHERE calendar_id = ? AND (dtstart < ? AND dtend > ? OR ics_data LIKE '%RRULE%' OR ics_data LIKE '%RDATE%') ORDER BY dtstart`
+			`SELECT * FROM events WHERE calendar_id = ? AND dtstart < ? AND dtend > ? ORDER BY dtstart`
 		).bind(cal.id, end, start).all();
 	} else {
 		result = await db.prepare(
