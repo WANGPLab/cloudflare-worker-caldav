@@ -29,6 +29,7 @@ function escXml(s) {
 export const DAV_HEADERS = {
 	'DAV': '1, 2, 3, calendar-access, addressbook',
 	'Content-Type': 'application/xml; charset=utf-8',
+	'Access-Control-Allow-Origin': '*',
 };
 
 // Build a <D:multistatus> response from an array of response objects.
