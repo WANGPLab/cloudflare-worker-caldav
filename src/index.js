@@ -53,19 +53,6 @@ export default {
 
 		let response;
 
-		// --- CORS preflight ---
-		if (method === 'OPTIONS') {
-			const corsHeaders = {
-				'Access-Control-Allow-Origin': '*',
-				'Access-Control-Allow-Methods': 'GET, PUT, DELETE, PROPFIND, REPORT, OPTIONS, MKCALENDAR',
-				'Access-Control-Allow-Headers': 'Authorization, Content-Type, Depth, If-Match, If-None-Match',
-				'Access-Control-Max-Age': '86400',
-			};
-			if (request.headers.get('Access-Control-Request-Method')) {
-				return new Response(null, { status: 204, headers: corsHeaders });
-			}
-		}
-
 		// --- API routes (admin-password auth, no CalDAV auth needed) ---
 		if (url.pathname === '/api/register' && method === 'POST') {
 			response = handleApiRegister(env, request);

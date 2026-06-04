@@ -47,7 +47,6 @@ export function authChallengeResponse() {
 		status: 401,
 		headers: {
 			'WWW-Authenticate': 'Basic realm="CalDAV"',
-			'Access-Control-Allow-Origin': '*',
 			...DAV_HEADERS,
 		},
 	});
