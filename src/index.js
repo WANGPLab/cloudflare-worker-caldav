@@ -4,6 +4,23 @@ import { getCalendar, listCalendars, createCalendar, deleteCalendar, getEvent, l
 import { authenticate, authChallengeResponse } from './auth';
 import { registerUser, changePassword, changeUsername, authenticateUser, deleteUser } from './users';
 
+function corsHeaders(origin) {
+	return {
+		'Access-Control-Allow-Origin': origin || '*',
+		'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PROPFIND, REPORT, MKCALENDAR, OPTIONS',
+		'Access-Control-Allow-Headers': 'Authorization, Content-Type, Depth, If-Match, If-None-Match, X-Method-Override, User-Agent, Content-type, If-match, If-None-Match, Lock-Token, Timeout, Destination, Overwrite, Prefer, X-client, X-Requested-With',
+		'Access-Control-Expose-Headers': 'ETag, DAV, WWW-Authenticate',
+		'Access-Control-Max-Age': '86400',
+	};
+}
+
+function addCors(response, origin) {
+	for (const [k, v] of Object.entries(corsHeaders(origin))) {
+		response.headers.set(k, v);
+	}
+	return response;
+}
+
 // Path patterns:
 //   /api/register             → POST: create user
 //   /api/change-password      → POST: change password
@@ -36,6 +53,7 @@ const DEBUG = false; // Set false to disable debug logging
 export default {
 	async fetch(request, env) {
 		const url = new URL(request.url);
+		const origin = request.headers.get('Origin') || '';
 		let method = request.method.toUpperCase();
 
 		if (DEBUG) {
@@ -44,6 +62,16 @@ export default {
 			console.log(`\n=== ${method} ${url.pathname} ===`);
 			console.log(`Host: ${url.host}  Auth: ${request.headers.get('Authorization') ? 'yes' : 'no'}`);
 			console.log(`Body (first 500): ${body.substring(0, 500)}`);
+		}
+
+		// Handle CORS preflight (browser sends Origin + Access-Control-Request-Method)
+		if (method === 'OPTIONS' && request.headers.get('Access-Control-Request-Method')) {
+			return addCors(new Response(null, {
+				status: 200,
+				headers: {
+					Allow: 'OPTIONS, PROPFIND, REPORT, GET, PUT, DELETE, MKCALENDAR',
+				},
+			}), origin);
 		}
 
 		const override = request.headers.get('X-Method-Override');
@@ -112,7 +140,7 @@ export default {
 				const body = await cloned.text().catch(() => '(unreadable)');
 				console.log(`Resp: ${response.status} ${body.substring(0, 800)}`);
 			}
-			return response;
+			return response ? addCors(response, origin) : new Response('Not Found', { status: 404 });
 		},
 	};
 
@@ -210,7 +238,7 @@ function handleOptions() {
 function parsePropfindBody(text) {
 	if (!text) return [];
 	const props = [];
-	const regex = /<(?:D:)?(getetag|getcontenttype|resourcetype|displayname|getctag|current-user-principal|calendar-home-set|supported-report-set|principal-URL|principal-collection-set|calendar-user-address-set|owner|sync-token|current-user-privilege-set)\s*\/?>/gi;
+	const regex = /<(?:D:|C:|CS:|CA:)?(getetag|getcontenttype|resourcetype|displayname|getctag|current-user-principal|calendar-home-set|supported-report-set|principal-URL|principal-collection-set|calendar-user-address-set|owner|sync-token|current-user-privilege-set|supported-calendar-component-set|calendar-description|calendar-timezone|calendar-data)\s*\/?>/gi;
 	let m;
 	while ((m = regex.exec(text)) !== null) {
 		props.push(m[1]);
@@ -280,7 +308,10 @@ function handlePrincipalDiscovery(owner) {
 
 async function handleReport(env, owner, calPath, request) {
 	if (!calPath) {
-		return new Response(buildError('not-found'), { status: 404, headers: DAV_HEADERS });
+		// REPORT at principal level (e.g. delegation check) - return empty multistatus
+		return new Response(`<?xml version="1.0" encoding="utf-8"?>
+<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+</D:multistatus>`, { status: 207, headers: DAV_HEADERS });
 	}
 
 	const db = env.CALDAV_DB;
@@ -323,7 +354,7 @@ async function handleSyncCollection(cal, calPath, db) {
 async function handleCalendarMultiget(calPath, db, body) {
 	// Extract hrefs from request body
 	const hrefs = [];
-	const hrefRegex = /<(?:D:)?href[^>]*>([^<]+)<\/(?:D:)?href>/g;
+	const hrefRegex = /<(?:D:|C:|CS:|CA:)?href[^>]*>([^<]+)<\/(?:D:|C:|CS:|CA:)?href>/g;
 	let m;
 	while ((m = hrefRegex.exec(body)) !== null) {
 		hrefs.push(m[1]);
