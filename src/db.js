@@ -47,35 +47,46 @@ export async function listEvents(db, calendarPath, start, end) {
 }
 
 export async function upsertEvent(db, calendarPath, uid, icsData, dtstart, dtend) {
+	console.log(`[upsertEvent] calendarPath="${calendarPath}" uid="${uid}"`);
 	const cal = await getCalendar(db, calendarPath);
-	if (!cal) return null;
+	if (!cal) { console.log(`[upsertEvent] calendar NOT found`); return null; }
+	console.log(`[upsertEvent] cal.id=${cal.id}`);
 	const existing = await db.prepare(
 		'SELECT id FROM events WHERE calendar_id = ? AND uid = ?'
 	).bind(cal.id, uid).first();
 
 	if (existing) {
+		console.log(`[upsertEvent] UPDATE id=${existing.id}`);
 		await db.prepare(
 			`UPDATE events SET ics_data = ?, dtstart = ?, dtend = ?, updated = datetime('now')
 			 WHERE id = ?`
 		).bind(icsData, dtstart, dtend, existing.id).run();
 	} else {
+		console.log(`[upsertEvent] INSERT`);
 		await db.prepare(
 			`INSERT INTO events (calendar_id, uid, ics_data, dtstart, dtend)
 			 VALUES (?, ?, ?, ?, ?)`
 		).bind(cal.id, uid, icsData, dtstart, dtend).run();
 	}
-	// Update calendar ctag so clients detect changes
 	await db.prepare(`UPDATE calendars SET updated = datetime('now') WHERE id = ?`).bind(cal.id).run();
-	return getEvent(db, calendarPath, uid);
+	const verify = await getEvent(db, calendarPath, uid);
+	console.log(`[upsertEvent] verify: ${verify ? 'FOUND' : 'NOT FOUND'}`);
+	return verify;
 }
 
 export async function deleteEvent(db, calendarPath, uid) {
+	console.log(`[deleteEvent] calendarPath="${calendarPath}" uid="${uid}"`);
 	const cal = await getCalendar(db, calendarPath);
-	if (!cal) return false;
+	if (!cal) { console.log(`[deleteEvent] calendar NOT found`); return false; }
+	console.log(`[deleteEvent] cal.id=${cal.id}`);
+	const check = await db.prepare('SELECT id, uid FROM events WHERE calendar_id = ? AND uid = ?')
+		.bind(cal.id, uid).first();
+	console.log(`[deleteEvent] check: ${check ? `id=${check.id} uid="${check.uid}"` : 'NOT FOUND'}`);
 	const result = await db.prepare(
 		'DELETE FROM events WHERE calendar_id = ? AND uid = ?'
 	).bind(cal.id, uid).run();
-	if (result.changes > 0) {
+	console.log(`[deleteEvent] changes=${result.meta.changes}`);
+	if (result.meta.changes > 0) {
 		await db.prepare(`UPDATE calendars SET updated = datetime('now') WHERE id = ?`).bind(cal.id).run();
 		return true;
 	}
