@@ -4,7 +4,7 @@
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "my-first-worker",
+	"name": "caldav2",
 	"main": "src/index.js",
 	"compatibility_date": "2026-05-29",
 	"compatibility_flags": [
@@ -17,8 +17,8 @@
 	"d1_databases": [
 		{
 			"binding": "CALDAV_DB",
-			"database_name": "caldav-db",
-			"database_id": "2bc0020a-e08b-4893-b8e6-de1743168053"
+			"database_name": "caldav-db1",
+			"database_id": "4c20ea89-fbfb-4b51-b542-94545a73962d"
 		}
 	]
 }
